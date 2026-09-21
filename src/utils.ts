@@ -9,6 +9,11 @@ export function getDuplicateField(error: unknown): "username" | "email" | null {
     return null;
 }
 
+// Escape % _ \ để người dùng gõ ký tự đặc biệt vẫn được tìm theo nghĩa đen trong câu LIKE
+export function escapeLike(text: string) {
+    return text.replace(/[\\%_]/g, "\\$&");
+}
+
 // Đổi lỗi kiểm tra của zod thành { tênÔ: "thông báo" }
 export function collectErrors(error: z.ZodError) {
     const errors: Record<string, string> = {};

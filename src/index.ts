@@ -3,6 +3,9 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import authRouter from "./routes/auth";
 import adminRouter from "./routes/admin";
+import productsRouter from "./routes/products";
+import adminProductsRouter from "./routes/adminProducts";
+import { UPLOAD_ROOT } from "./uploads";
 import { pool } from "./db";
 
 const app = express();
@@ -21,7 +24,20 @@ app.get("/api/health", async (_req, res) => {
 });
 
 app.use("/api/auth", authRouter);
+
+// Ảnh do admin tải lên. Tên file là mã ngẫu nhiên nên có thể cho trình duyệt lưu lâu
+app.use(
+    "/uploads",
+    express.static(UPLOAD_ROOT, {
+        maxAge: "7d",
+        immutable: true,
+        setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
+    }),
+);
+
+app.use("/api/admin/products", adminProductsRouter); // đặt trước "/api/admin"
 app.use("/api/admin", adminRouter);
+app.use("/api/products", productsRouter);
 
 const port = Number(process.env.PORT ?? 3001);
 app.listen(port, () => {
