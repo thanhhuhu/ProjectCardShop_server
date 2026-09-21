@@ -56,13 +56,13 @@ function buildQrUrl(code: string, amount: number): string | null {
     if (!BANK_NAME || !BANK_ACCOUNT_NUMBER) return null;
 
     const params = new URLSearchParams({
-        acc: BANK_ACCOUNT_NUMBER,
-        bank: BANK_NAME,
         amount: String(amount),
-        des: code,
+        addInfo: code,
     });
 
-    return `https://vietqr.app/img?${params.toString()}`;
+    if (BANK_ACCOUNT_NAME) params.set("accountName", BANK_ACCOUNT_NAME);
+
+    return `https://img.vietqr.io/image/${encodeURIComponent(BANK_NAME)}-${encodeURIComponent(BANK_ACCOUNT_NUMBER)}-compact2.png?${params.toString()}`;
 }
 
 function buildPaymentInfo(code: string, amount: number) {
