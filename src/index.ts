@@ -43,8 +43,8 @@ app.use("/api/admin", adminRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/orders", ordersRouter);
 
-const port = Number(process.env.PORT ?? 3001);
+const port = Number(process.env.PORT ?? 10000);
 
-app.listen(port, () => {
-    console.log(`API đang chạy tại http://localhost:${port}`);
+app.listen(port, "0.0.0.0", () => {
+    console.log(`API đang chạy on port ${port}`);
 });
