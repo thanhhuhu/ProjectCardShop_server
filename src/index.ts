@@ -1,18 +1,22 @@
-import "dotenv/config"; // phải nằm đầu tiên để .env được nạp trước khi kết nối database
+import "dotenv/config";
 import express from "express";
 import cookieParser from "cookie-parser";
 import authRouter from "./routes/auth";
 import adminRouter from "./routes/admin";
+<<<<<<< HEAD
 import productsRouter from "./routes/products";
 import adminProductsRouter from "./routes/adminProducts";
 import { UPLOAD_ROOT } from "./uploads";
+=======
+import ordersRouter from "./routes/orders";
+>>>>>>> f869c10cc04fe4da602707e1489e7575e8b5139b
 import { pool } from "./db";
 
 const app = express();
+
 app.use(express.json());
 app.use(cookieParser());
 
-// Mở http://localhost:3001/api/health để kiểm tra server và database đã nối được chưa
 app.get("/api/health", async (_req, res) => {
     try {
         await pool.query("SELECT 1");
@@ -37,7 +41,11 @@ app.use(
 
 app.use("/api/admin/products", adminProductsRouter); // đặt trước "/api/admin"
 app.use("/api/admin", adminRouter);
+<<<<<<< HEAD
 app.use("/api/products", productsRouter);
+=======
+app.use("/api/orders", ordersRouter);
+>>>>>>> f869c10cc04fe4da602707e1489e7575e8b5139b
 
 const port = Number(process.env.PORT ?? 3001);
 app.listen(port, () => {
