@@ -1,10 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 
-// Thư mục lưu ảnh: server/uploads (cạnh thư mục src)
-export const UPLOAD_ROOT = fileURLToPath(new URL("../uploads", import.meta.url));
+// Thư mục lưu ảnh: server/uploads (cạnh thư mục src).
+// Dùng process.cwd() để tương thích với CommonJS build trên Render.
+export const UPLOAD_ROOT = path.resolve(process.cwd(), "uploads");
 const PRODUCT_DIR = path.join(UPLOAD_ROOT, "products");
 
 // Địa chỉ công khai của ảnh đã tải lên, ví dụ /uploads/products/3f2a....jpg
@@ -44,7 +44,7 @@ export async function saveProductImage(buffer: Buffer, extension: string): Promi
 export async function deleteUploadedImage(imageUrl: string): Promise<void> {
     if (!imageUrl.startsWith(PRODUCT_URL_PREFIX)) return;
 
-    const filename = path.basename(imageUrl); // bỏ mọi thành phần "../"
+    const filename = path.basename(imageUrl);
     try {
         await fs.unlink(path.join(PRODUCT_DIR, filename));
     } catch {
