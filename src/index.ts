@@ -11,6 +11,32 @@ import { pool } from "./db";
 
 const app = express();
 
+const allowedOrigins = (process.env.FRONTEND_URL ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173"))
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+// CORS cho frontend Vercel -> backend Render.
+// Cookie đăng nhập cần credentials để browser gửi cookie qua API.
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+
+    if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+        res.setHeader("Vary", "Origin");
+    }
+
+    if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+    }
+
+    next();
+});
+
 app.use(express.json());
 app.use(cookieParser());
 
