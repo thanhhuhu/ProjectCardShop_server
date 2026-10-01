@@ -1,9 +1,8 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Card Shop API",
   "main": "dist/index.js",
-  "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
