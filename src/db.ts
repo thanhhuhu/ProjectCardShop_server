@@ -9,4 +9,6 @@ export const pool = mysql.createPool({
     database: process.env.DB_NAME ?? "card_shop",
     waitForConnections: true,
     connectionLimit: 10,
+    // Nhiều dịch vụ MySQL trên cloud bắt buộc SSL. Đặt DB_SSL=true trên Render nếu cần.
+    ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" } : undefined,
 });
