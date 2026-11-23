@@ -60,9 +60,11 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // Giới hạn số lần thử đăng nhập / đăng ký để chống dò mật khẩu
+// Chỉ đếm các lần THẤT BẠI. Khi chạy trên máy (không phải production) thì nới rộng để dễ test.
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 10,
+    limit: process.env.NODE_ENV === "production" ? 10 : 100,
+    skipSuccessfulRequests: true,
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: { message: "Bạn thử quá nhiều lần, vui lòng đợi 15 phút rồi thử lại" },
