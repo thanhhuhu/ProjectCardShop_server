@@ -16,6 +16,7 @@ interface ProductRow extends RowDataPacket {
     id: number;
     code: string;
     name: string;
+    archetype: string;
     rarity: string;
     game: string;
     price: number;
@@ -23,12 +24,13 @@ interface ProductRow extends RowDataPacket {
     image_url: string;
 }
 
-const COLUMNS = "id, code, name, rarity, game, price, stock, image_url";
+const COLUMNS = "id, code, name, archetype, rarity, game, price, stock, image_url";
 
 const toProduct = (row: ProductRow) => ({
     id: row.id,
     code: row.code,
     name: row.name,
+    archetype: row.archetype,
     rarity: row.rarity,
     game: row.game,
     price: row.price,
@@ -40,6 +42,7 @@ const toProduct = (row: ProductRow) => ({
 const COLUMN_OF: Record<string, string> = {
     code: "code",
     name: "name",
+    archetype: "archetype",
     rarity: "rarity",
     game: "game",
     price: "price",
@@ -57,6 +60,7 @@ const imageUrlSchema = z
 const productSchema = z.object({
     code: z.string().trim().min(1, "Vui lòng nhập mã thẻ").max(50, "Mã thẻ tối đa 50 ký tự"),
     name: z.string().trim().min(1, "Vui lòng nhập tên thẻ").max(255, "Tên thẻ tối đa 255 ký tự"),
+    archetype: z.string().trim().max(100, "Tộc hệ tối đa 100 ký tự").default(""),
     rarity: z.string().trim().min(1, "Vui lòng nhập độ hiếm").max(50, "Độ hiếm tối đa 50 ký tự"),
     game: z.string().trim().min(1, "Vui lòng chọn game").max(50, "Tên game tối đa 50 ký tự"),
     price: z.number().int("Giá phải là số nguyên").min(0, "Giá không được âm").max(1_000_000_000, "Giá quá lớn"),
@@ -142,8 +146,8 @@ router.post("/", async (req, res) => {
 
     try {
         const [result] = await pool.execute<ResultSetHeader>(
-            "INSERT INTO products (code, name, rarity, game, price, stock, image_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [p.code, p.name, p.rarity, p.game, p.price, p.stock, p.imageUrl],
+            "INSERT INTO products (code, name, archetype, rarity, game, price, stock, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [p.code, p.name, p.archetype, p.rarity, p.game, p.price, p.stock, p.imageUrl],
         );
 
         const [rows] = await pool.execute<ProductRow[]>(`SELECT ${COLUMNS} FROM products WHERE id = ?`, [result.insertId]);

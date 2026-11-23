@@ -118,13 +118,14 @@ async function main() {
     // 3. Nhập theo thứ tự ngược để thẻ đứng đầu file có id lớn nhất, tức là "mới cập nhật" nhất
     const rows = [...products]
         .reverse()
-        .map((p) => [p.code, p.name, p.rarity, p.game, p.price, p.stock, p.imageUrl]);
+        // Tộc hệ lấy từ chữ đầu trong tên thẻ (vd "Trickstar Lilybell" -> "Trickstar")
+        .map((p) => [p.code, p.name, p.name.trim().split(/\s+/)[0] ?? "", p.rarity, p.game, p.price, p.stock, p.imageUrl]);
 
     await pool.query(
-        `INSERT INTO products (code, name, rarity, game, price, stock, image_url)
+        `INSERT INTO products (code, name, archetype, rarity, game, price, stock, image_url)
          VALUES ?
          ON DUPLICATE KEY UPDATE
-           name = VALUES(name), game = VALUES(game), price = VALUES(price),
+           name = VALUES(name), archetype = VALUES(archetype), game = VALUES(game), price = VALUES(price),
            stock = VALUES(stock), image_url = VALUES(image_url)`,
         [rows],
     );

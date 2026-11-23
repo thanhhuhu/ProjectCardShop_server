@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS products (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     code VARCHAR(50) NOT NULL,
     name VARCHAR(255) NOT NULL,
+    archetype VARCHAR(100) NOT NULL DEFAULT '' COMMENT 'Tộc hệ, vd Trickstar',
     rarity VARCHAR(50) NOT NULL,
     game VARCHAR(50) NOT NULL,
     price INT UNSIGNED NOT NULL DEFAULT 0,
@@ -31,7 +32,8 @@ CREATE TABLE IF NOT EXISTS products (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT uq_products_code_rarity UNIQUE (code, rarity),
-    INDEX idx_products_game (game)
+    INDEX idx_products_game (game),
+    INDEX idx_products_archetype (game, archetype)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Tạo tài khoản admin đầu tiên: đăng ký bình thường trên web, rồi chạy:

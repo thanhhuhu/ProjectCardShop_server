@@ -9,6 +9,7 @@ interface ProductRow extends RowDataPacket {
     id: number;
     code: string;
     name: string;
+    archetype: string;
     rarity: string;
     game: string;
     price: number;
@@ -16,13 +17,14 @@ interface ProductRow extends RowDataPacket {
     image_url: string;
 }
 
-const COLUMNS = "id, code, name, rarity, game, price, stock, image_url";
+const COLUMNS = "id, code, name, archetype, rarity, game, price, stock, image_url";
 
 // Đổi tên cột trong database (image_url) sang tên frontend đang dùng (imageUrl)
 const toProduct = (row: ProductRow) => ({
     id: row.id,
     code: row.code,
     name: row.name,
+    archetype: row.archetype,
     rarity: row.rarity,
     game: row.game,
     price: row.price,
@@ -94,6 +96,8 @@ router.get("/suggest", async (req, res) => {
 router.get("/", async (req, res) => {
     const search = String(req.query.search ?? "").trim().slice(0, 100);
     const game = String(req.query.game ?? "").trim().slice(0, 50);
+    const archetype = String(req.query.archetype ?? "").trim().slice(0, 100);
+    const rarity = String(req.query.rarity ?? "").trim().slice(0, 50);
     const sortKey = String(req.query.sort ?? "newest");
     const orderBy = Object.hasOwn(ORDER_BY, sortKey) ? ORDER_BY[sortKey] : ORDER_BY.newest;
     const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
@@ -106,6 +110,14 @@ router.get("/", async (req, res) => {
     if (game) {
         conditions.push("game = ?");
         values.push(game);
+    }
+    if (archetype) {
+        conditions.push("archetype = ?");
+        values.push(archetype);
+    }
+    if (rarity) {
+        conditions.push("rarity = ?");
+        values.push(rarity);
     }
     if (Number.isInteger(exclude) && exclude > 0) {
         conditions.push("id <> ?");
@@ -129,6 +141,33 @@ router.get("/", async (req, res) => {
         res.json({ products: rows.map(toProduct), total, page, pageSize });
     } catch (error) {
         console.error("Lỗi lấy danh sách sản phẩm:", error);
+        res.status(500).json({ message: "Lỗi máy chủ, vui lòng thử lại sau" });
+    }
+});
+
+/* ---------- Danh sách tộc hệ & độ hiếm (cho dropdown lọc) ---------- */
+// Đặt trước "/:id" để chữ "filters" không bị hiểu là một id
+
+router.get("/filters", async (req, res) => {
+    const game = String(req.query.game ?? "").trim().slice(0, 50);
+    const gameCond = game ? "game = ?" : "1=1";
+    const gameParam = game ? [game] : [];
+
+    try {
+        const [archetypeRows] = await pool.query<(RowDataPacket & { archetype: string })[]>(
+            `SELECT DISTINCT archetype FROM products WHERE ${gameCond} AND archetype <> '' ORDER BY archetype`,
+            gameParam,
+        );
+        const [rarityRows] = await pool.query<(RowDataPacket & { rarity: string })[]>(
+            `SELECT DISTINCT rarity FROM products WHERE ${gameCond} ORDER BY rarity`,
+            gameParam,
+        );
+        res.json({
+            archetypes: archetypeRows.map((r) => r.archetype),
+            rarities: rarityRows.map((r) => r.rarity),
+        });
+    } catch (error) {
+        console.error("Lỗi lấy bộ lọc:", error);
         res.status(500).json({ message: "Lỗi máy chủ, vui lòng thử lại sau" });
     }
 });
