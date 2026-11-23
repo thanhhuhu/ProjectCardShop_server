@@ -8,6 +8,8 @@ import adminRouter from "./routes/admin";
 import productsRouter from "./routes/products";
 import adminProductsRouter from "./routes/adminProducts";
 import ordersRouter from "./routes/orders";
+import adminOrdersRouter from "./routes/adminOrders";
+import blogRouter from "./routes/blog";
 import { UPLOAD_ROOT } from "./uploads";
 import { pool } from "./db";
 
@@ -86,10 +88,12 @@ app.use(
 
 // Route sản phẩm admin phải đứng trước "/api/admin"
 app.use("/api/admin/products", adminProductsRouter);
+app.use("/api/admin/orders", adminOrdersRouter);
 app.use("/api/admin", adminRouter);
 
 app.use("/api/products", productsRouter);
 app.use("/api/orders", ordersRouter);
+app.use("/api/blog", blogRouter);
 
 // Lỗi không được bắt ở route (ví dụ mất kết nối database) vẫn trả JSON thay vì trang HTML
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
