@@ -242,6 +242,131 @@ router.post("/", async (req, res) => {
     }
 });
 
+/* ---------- Lịch sử đặt hàng của người dùng đang đăng nhập ---------- */
+
+interface MyOrderRow extends RowDataPacket {
+    id: number;
+    code: string;
+    full_name: string;
+    phone: string;
+    city: string;
+    address: string;
+    note: string;
+    subtotal: number;
+    shipping_fee: number;
+    total_amount: number;
+    payment_method: "cod" | "bank";
+    payment_status: "unpaid" | "paid" | "failed";
+    status: string;
+    paid_at: Date | null;
+    created_at: Date;
+}
+
+interface MyOrderItemRow extends RowDataPacket {
+    order_id: number;
+    product_id: number | null;
+    product_code: string;
+    product_name: string;
+    rarity: string;
+    unit_price: number;
+    quantity: number;
+    line_total: number;
+    image_url: string;
+}
+
+const myOrdersQuerySchema = z.object({
+    page: z.coerce.number().int().min(1).catch(1),
+    pageSize: z.coerce.number().int().min(1).max(50).catch(10),
+});
+
+router.get("/mine", async (req, res) => {
+    const userId = getUserId(req);
+    if (!userId) {
+        res.status(401).json({ message: "Bạn cần đăng nhập để xem lịch sử đặt hàng" });
+        return;
+    }
+
+    const { page, pageSize } = myOrdersQuerySchema.parse(req.query);
+
+    try {
+        const [[{ total }]] = await pool.query<(RowDataPacket & { total: number })[]>(
+            "SELECT COUNT(*) AS total FROM orders WHERE user_id = ?",
+            [userId],
+        );
+
+        const [orders] = await pool.query<MyOrderRow[]>(
+            `SELECT id, code, full_name, phone, city, address, note, subtotal, shipping_fee, total_amount,
+                    payment_method, payment_status, status, paid_at, created_at
+             FROM orders
+             WHERE user_id = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT ? OFFSET ?`,
+            [userId, pageSize, (page - 1) * pageSize],
+        );
+
+        const itemsByOrder = new Map<number, MyOrderItemRow[]>();
+        if (orders.length > 0) {
+            const [items] = await pool.query<MyOrderItemRow[]>(
+                `SELECT order_id, product_id, product_code, product_name, rarity, unit_price, quantity, line_total, image_url
+                 FROM order_items
+                 WHERE order_id IN (?)
+                 ORDER BY id`,
+                [orders.map((order) => order.id)],
+            );
+            for (const item of items) {
+                const list = itemsByOrder.get(item.order_id) ?? [];
+                list.push(item);
+                itemsByOrder.set(item.order_id, list);
+            }
+        }
+
+        res.json({
+            orders: orders.map((order) => {
+                const total = Number(order.total_amount);
+                // Đơn chuyển khoản chưa trả tiền: gửi kèm thông tin để người dùng quét QR lại
+                const awaitingTransfer =
+                    order.payment_method === "bank" && order.payment_status === "unpaid" && order.status !== "cancelled";
+
+                return {
+                    id: order.id,
+                    code: order.code,
+                    fullName: order.full_name,
+                    phone: order.phone,
+                    city: order.city,
+                    address: order.address,
+                    note: order.note,
+                    subtotal: Number(order.subtotal),
+                    shippingFee: Number(order.shipping_fee),
+                    total,
+                    payment: order.payment_method,
+                    paymentStatus: order.payment_status,
+                    status: order.status,
+                    paidAt: order.paid_at,
+                    createdAt: order.created_at,
+                    paymentInfo: awaitingTransfer ? buildPaymentInfo(order.code, total) : null,
+                    items: (itemsByOrder.get(order.id) ?? []).map((item) => ({
+                        productId: item.product_id,
+                        code: item.product_code,
+                        name: item.product_name,
+                        rarity: item.rarity,
+                        price: Number(item.unit_price),
+                        quantity: item.quantity,
+                        lineTotal: Number(item.line_total),
+                        imageUrl: item.image_url,
+                    })),
+                };
+            }),
+            total: Number(total),
+            page,
+            pageSize,
+            totalPages: Math.max(1, Math.ceil(Number(total) / pageSize)),
+        });
+    } catch (error) {
+        console.error("Lỗi lấy lịch sử đặt hàng:", error);
+        res.status(500).json({ message: "Không thể tải lịch sử đặt hàng" });
+    }
+});
+
 /* ---------- Kiểm tra trạng thái thanh toán ---------- */
 
 router.get("/:code/status", async (req, res) => {
