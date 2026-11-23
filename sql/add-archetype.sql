@@ -3,6 +3,9 @@
 -- An toàn khi chạy lại: nếu cột đã tồn tại, câu ADD COLUMN sẽ báo lỗi "Duplicate column" — khi đó
 -- bỏ qua câu đó và chỉ chạy phần UPDATE.
 
+-- Chọn database (bỏ dòng này nếu editor đã trỏ sẵn vào database của bạn)
+USE card_shop;
+
 ALTER TABLE products ADD COLUMN archetype VARCHAR(100) NOT NULL DEFAULT '' COMMENT 'Tộc hệ, vd Trickstar';
 ALTER TABLE products ADD INDEX idx_products_archetype (game, archetype);
 
