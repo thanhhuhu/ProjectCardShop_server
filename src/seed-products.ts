@@ -1,10 +1,16 @@
-// Nhập dữ liệu từ file src/data/products.ts (của frontend) vào bảng products.
-// Chạy:  npm run seed
+// Nhập dữ liệu từ file src/data/products.ts (của frontend) vào bảng products, kèm ảnh.
+// Chạy (trong thư mục server):  npm run seed
 // Chạy lại nhiều lần được: thẻ đã có (cùng mã + độ hiếm) sẽ được CẬP NHẬT theo file, không tạo trùng.
 // Lưu ý: chạy lại sẽ ghi đè giá, tồn kho... bằng dữ liệu trong file.
+//
+// Script tự tìm thư mục frontend nằm CẠNH thư mục server, tên ProjectCardShop hoặc ProjectShoppingCard.
+// Để ở chỗ khác thì đặt biến FRONTEND_DIR trong .env, ví dụ FRONTEND_DIR=D:/code/ProjectCardShop
 
 import "dotenv/config";
+import { existsSync, promises as fs } from "node:fs";
+import path from "node:path";
 import { pool } from "./db";
+import { PRODUCT_URL_PREFIX, UPLOAD_ROOT } from "./uploads";
 
 interface SeedProduct {
     code: string;
@@ -16,31 +22,64 @@ interface SeedProduct {
     imageUrl: string;
 }
 
-// Tìm file dữ liệu sản phẩm của frontend. Thử lần lượt các vị trí thường gặp.
-async function loadProducts(): Promise<SeedProduct[]> {
-    const candidates = [
-        "../../ProjectShoppingCard/src/data/products", // thư mục server nằm cạnh thư mục ProjectShoppingCard
-        "../../src/data/products", // thư mục server nằm ngay trong thư mục gốc của frontend
-    ];
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 
-    for (const path of candidates) {
-        try {
-            const module = await import(path);
-            return module.products as SeedProduct[];
-        } catch (error) {
-            // ESM báo ERR_MODULE_NOT_FOUND, CommonJS báo MODULE_NOT_FOUND: cả hai đều là "không có file này, thử đường dẫn khác"
-            const code = (error as { code?: string }).code;
-            if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") throw error;
-        }
+// File products.ts của frontend có dạng `import X from "../images/products/X.jpg"`.
+// Vite hiểu được kiểu import này, còn Node thì không. Ở đây dạy Node: import một file ảnh
+// thì trả về đường dẫn tuyệt đối của file đó, để bước sau copy ảnh sang server.
+function allowImageImports() {
+    const extensions = require.extensions as Record<string, (module: NodeJS.Module, filename: string) => void>;
+    for (const extension of IMAGE_EXTENSIONS) {
+        extensions[extension] = (module, filename) => {
+            module.exports = { __esModule: true, default: filename };
+        };
+    }
+}
+
+function findProductsFile(): string {
+    const parent = path.resolve(process.cwd(), "..");
+    const roots = [
+        process.env.FRONTEND_DIR,
+        path.join(parent, "ProjectCardShop"),
+        path.join(parent, "ProjectShoppingCard"),
+    ].filter((root): root is string => Boolean(root));
+
+    for (const root of roots) {
+        const file = path.resolve(root, "src", "data", "products.ts");
+        if (existsSync(file)) return file;
     }
 
     throw new Error(
-        "Không tìm thấy file src/data/products.ts của frontend. Hãy sửa danh sách đường dẫn trong hàm loadProducts (seed-products.ts).",
+        "Không tìm thấy src/data/products.ts của frontend. Đã thử:\n" +
+            roots.map((root) => "  - " + path.resolve(root)).join("\n") +
+            "\nHãy đặt FRONTEND_DIR=<đường dẫn thư mục frontend> trong file .env của server.",
     );
 }
 
+function loadProducts(): SeedProduct[] {
+    allowImageImports();
+    const file = findProductsFile();
+    console.log(`Đọc dữ liệu từ ${file}`);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require(file) as { products?: SeedProduct[] };
+    if (!Array.isArray(module.products)) throw new Error("File products.ts không export `products`.");
+    return module.products;
+}
+
+// Ảnh nằm trong thư mục frontend: copy sang server/uploads/products với tên cố định (seed-<tên file>),
+// chạy lại seed sẽ ghi đè đúng file đó chứ không sinh thêm file mới.
+async function copyImage(imageUrl: string): Promise<string> {
+    if (!path.isAbsolute(imageUrl) || !existsSync(imageUrl)) return imageUrl;
+
+    const dir = path.join(UPLOAD_ROOT, "products");
+    await fs.mkdir(dir, { recursive: true });
+    const filename = `seed-${path.basename(imageUrl).replace(/[^\w.-]/g, "_")}`;
+    await fs.copyFile(imageUrl, path.join(dir, filename));
+    return `${PRODUCT_URL_PREFIX}${filename}`;
+}
+
 async function main() {
-    const products = await loadProducts();
+    const products = loadProducts();
 
     // 1. Kiểm tra dữ liệu trước khi nhập, báo rõ thẻ nào sai
     const seen = new Map<string, string>();
@@ -59,7 +98,7 @@ async function main() {
         if (!Number.isInteger(p.stock) || p.stock < 0) {
             problems.push(`Tồn kho không hợp lệ: ${p.code} "${p.name}" (${p.stock})`);
         }
-        if (!p.imageUrl.startsWith("/") && !p.imageUrl.startsWith("http")) {
+        if (!path.isAbsolute(p.imageUrl) && !p.imageUrl.startsWith("/") && !p.imageUrl.startsWith("http")) {
             console.warn(`Cảnh báo: đường dẫn ảnh nên bắt đầu bằng "/": ${p.code} → ${p.imageUrl}`);
         }
     }
@@ -71,7 +110,12 @@ async function main() {
         return;
     }
 
-    // 2. Nhập theo thứ tự ngược để thẻ đứng đầu file có id lớn nhất, tức là "mới cập nhật" nhất
+    // 2. Copy ảnh từ frontend sang server
+    for (const p of products) {
+        p.imageUrl = await copyImage(p.imageUrl);
+    }
+
+    // 3. Nhập theo thứ tự ngược để thẻ đứng đầu file có id lớn nhất, tức là "mới cập nhật" nhất
     const rows = [...products]
         .reverse()
         .map((p) => [p.code, p.name, p.rarity, p.game, p.price, p.stock, p.imageUrl]);
