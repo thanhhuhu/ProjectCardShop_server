@@ -5,7 +5,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db";
 import { requireAdmin } from "../middleware";
 import type { CurrentUser } from "../middleware";
-import { collectErrors, getDuplicateField } from "../utils";
+import { collectErrors, escapeLike, getDuplicateField } from "../utils";
 
 const router = Router();
 
@@ -50,7 +50,7 @@ router.get("/users", async (req, res) => {
     const page = Math.max(1, Number.parseInt(String(req.query.page ?? "1"), 10) || 1);
 
     // Escape % _ \ để người dùng gõ ký tự đặc biệt vẫn tìm đúng nghĩa đen
-    const like = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+    const like = `%${escapeLike(search)}%`;
     const where = search ? "WHERE username LIKE ? OR email LIKE ?" : "";
     const params = search ? [like, like] : [];
 

@@ -28,7 +28,9 @@ async function loadProducts(): Promise<SeedProduct[]> {
             const module = await import(path);
             return module.products as SeedProduct[];
         } catch (error) {
-            if ((error as { code?: string }).code !== "ERR_MODULE_NOT_FOUND") throw error;
+            // ESM báo ERR_MODULE_NOT_FOUND, CommonJS báo MODULE_NOT_FOUND: cả hai đều là "không có file này, thử đường dẫn khác"
+            const code = (error as { code?: string }).code;
+            if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") throw error;
         }
     }
 

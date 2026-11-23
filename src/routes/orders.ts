@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db";
 import { getUserId } from "../auth";
+import { collectErrors } from "../utils";
 
 const router = Router();
 
@@ -15,20 +16,27 @@ const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER?.trim() ?? "";
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME?.trim() ?? "";
 const SEPAY_WEBHOOK_API_KEY = process.env.SEPAY_WEBHOOK_API_KEY?.trim() ?? "";
 
+// Chỉ nhận id sản phẩm và số lượng. Tên, mã, giá, ảnh... luôn đọc lại từ database,
+// không tin dữ liệu frontend gửi lên (các trường thừa như price sẽ bị zod bỏ qua).
+const MAX_QUANTITY_PER_PRODUCT = 99;
+
 const orderItemSchema = z.object({
     productId: z.number().int().positive(),
-    code: z.string().trim().min(1).max(100),
-    name: z.string().trim().min(1).max(255),
-    rarity: z.string().trim().max(100).default(""),
-    price: z.number().int().nonnegative(),
-    quantity: z.number().int().min(1).max(99),
-    imageUrl: z.string().trim().max(1000).default(""),
+    quantity: z.number().int().min(1).max(MAX_QUANTITY_PER_PRODUCT),
 });
 
 const createOrderSchema = z.object({
-    fullName: z.string().trim().min(2).max(120),
-    phone: z.string().trim().min(8).max(30),
-    email: z.string().trim().max(255).optional().default(""),
+    fullName: z.string().trim().min(2, "Họ tên cần ít nhất 2 ký tự").max(120),
+    phone: z.string().trim().min(8, "Số điện thoại không hợp lệ").max(30),
+    email: z
+        .string()
+        .trim()
+        .toLowerCase()
+        .max(255)
+        .email("Địa chỉ email không hợp lệ")
+        .or(z.literal(""))
+        .optional()
+        .default(""),
     city: z.string().trim().min(1).max(120),
     address: z.string().trim().min(5).max(255),
     note: z.string().trim().max(1000).optional().default(""),
@@ -45,6 +53,33 @@ interface OrderRow extends RowDataPacket {
     status: "pending" | "confirmed" | "shipping" | "completed" | "cancelled";
     paid_at: Date | null;
     created_at: Date;
+}
+
+interface ProductRow extends RowDataPacket {
+    id: number;
+    code: string;
+    name: string;
+    rarity: string;
+    price: number;
+    stock: number;
+    image_url: string;
+}
+
+// Lỗi do dữ liệu người dùng (sản phẩm không tồn tại, hết hàng...), trả về đúng mã HTTP thay vì 500
+class OrderError extends Error {
+    constructor(
+        public status: number,
+        message: string,
+    ) {
+        super(message);
+    }
+}
+
+// So sánh chuỗi bí mật với thời gian không đổi để không lộ API key qua thời gian phản hồi
+function safeEqual(a: string, b: string): boolean {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
 }
 
 function createOrderCode(): string {
@@ -83,7 +118,7 @@ router.post("/", async (req, res) => {
     const parsed = createOrderSchema.safeParse(req.body);
 
     if (!parsed.success) {
-        res.status(400).json({ message: "Dữ liệu đơn hàng không hợp lệ" });
+        res.status(400).json({ message: "Dữ liệu đơn hàng không hợp lệ", errors: collectErrors(parsed.error) });
         return;
     }
 
@@ -96,19 +131,51 @@ router.post("/", async (req, res) => {
         return;
     }
 
-    // Backend tự tính lại tiền từ các dòng hàng nhận được, không dùng subtotal/total do frontend gửi.
-    const subtotal = data.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const shippingFee = subtotal === 0 || subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
-    const total = subtotal + shippingFee;
+    // Gộp các dòng trùng sản phẩm thành một dòng
+    const quantities = new Map<number, number>();
+    for (const item of data.items) {
+        quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
+    }
+    for (const quantity of quantities.values()) {
+        if (quantity > MAX_QUANTITY_PER_PRODUCT) {
+            res.status(400).json({ message: `Mỗi sản phẩm chỉ đặt tối đa ${MAX_QUANTITY_PER_PRODUCT} cái` });
+            return;
+        }
+    }
+
     const paymentStatus = "unpaid";
     const status = "pending";
     const code = createOrderCode();
     const userId = getUserId(req);
 
-    const connection = await pool.getConnection();
-
+    let connection;
     try {
+        connection = await pool.getConnection();
         await connection.beginTransaction();
+
+        // Đọc giá + tồn kho từ database và khóa các dòng này cho tới khi commit,
+        // để hai người đặt cùng lúc không mua quá số lượng còn lại.
+        const ids = [...quantities.keys()];
+        const [products] = await connection.query<ProductRow[]>(
+            "SELECT id, code, name, rarity, price, stock, image_url FROM products WHERE id IN (?) FOR UPDATE",
+            [ids],
+        );
+        const productById = new Map(products.map((p) => [Number(p.id), p]));
+
+        const lines = ids.map((productId) => {
+            const product = productById.get(productId);
+            const quantity = quantities.get(productId)!;
+            if (!product) throw new OrderError(400, `Sản phẩm #${productId} không còn tồn tại`);
+            if (product.stock < quantity) {
+                throw new OrderError(409, `"${product.name}" chỉ còn ${product.stock} sản phẩm`);
+            }
+            return { product, quantity, lineTotal: Number(product.price) * quantity };
+        });
+
+        // Tiền luôn tính từ giá trong database
+        const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
+        const shippingFee = subtotal === 0 || subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
+        const total = subtotal + shippingFee;
 
         const [orderResult] = await connection.execute<ResultSetHeader>(
             `INSERT INTO orders
@@ -135,23 +202,14 @@ router.post("/", async (req, res) => {
 
         const orderId = orderResult.insertId;
 
-        for (const item of data.items) {
+        for (const { product, quantity, lineTotal } of lines) {
             await connection.execute(
                 `INSERT INTO order_items
                     (order_id, product_id, product_code, product_name, rarity, unit_price, quantity, line_total, image_url)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    orderId,
-                    item.productId,
-                    item.code,
-                    item.name,
-                    item.rarity,
-                    item.price,
-                    item.quantity,
-                    item.price * item.quantity,
-                    item.imageUrl,
-                ],
+                [orderId, product.id, product.code, product.name, product.rarity, product.price, quantity, lineTotal, product.image_url],
             );
+            await connection.execute("UPDATE products SET stock = stock - ? WHERE id = ?", [quantity, product.id]);
         }
 
         await connection.commit();
@@ -170,11 +228,17 @@ router.post("/", async (req, res) => {
             },
         });
     } catch (error) {
-        await connection.rollback();
+        await connection?.rollback().catch(() => undefined);
+
+        if (error instanceof OrderError) {
+            res.status(error.status).json({ message: error.message });
+            return;
+        }
+
         console.error("Lỗi tạo đơn hàng:", error);
         res.status(500).json({ message: "Không thể tạo đơn hàng. Vui lòng thử lại." });
     } finally {
-        connection.release();
+        connection?.release();
     }
 });
 
@@ -228,12 +292,12 @@ router.post("/webhook/sepay", async (req, res) => {
     const authorization = String(req.get("authorization") ?? "");
     const expected = `Apikey ${SEPAY_WEBHOOK_API_KEY}`;
 
-    if (authorization !== expected) {
+    if (!safeEqual(authorization, expected)) {
         res.status(401).json({ success: false });
         return;
     }
 
-    const body = req.body as Record<string, unknown>;
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const transactionId = String(body.id ?? "").trim();
     const transferType = String(body.transferType ?? "").trim().toLowerCase();
     const transferAmount = Number(body.transferAmount ?? 0);
@@ -260,9 +324,9 @@ router.post("/webhook/sepay", async (req, res) => {
         return;
     }
 
-    const connection = await pool.getConnection();
-
+    let connection;
     try {
+        connection = await pool.getConnection();
         await connection.beginTransaction();
 
         const [orders] = await connection.execute<OrderRow[]>(
@@ -315,11 +379,11 @@ router.post("/webhook/sepay", async (req, res) => {
         await connection.commit();
         res.status(200).json({ success: true });
     } catch (error) {
-        await connection.rollback();
+        await connection?.rollback().catch(() => undefined);
         console.error("Lỗi webhook SePay:", error);
         res.status(500).json({ success: false });
     } finally {
-        connection.release();
+        connection?.release();
     }
 });
 

@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cookieParser from "cookie-parser";
+import type { NextFunction, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import authRouter from "./routes/auth";
 import adminRouter from "./routes/admin";
 import productsRouter from "./routes/products";
@@ -11,10 +13,17 @@ import { pool } from "./db";
 
 const app = express();
 
+// Render đứng sau một proxy: cần dòng này để req.ip là IP thật của người dùng (dùng cho rate limit)
+app.set("trust proxy", 1);
+
 const allowedOrigins = (process.env.FRONTEND_URL ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173"))
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+if (allowedOrigins.length === 0) {
+    console.warn("Cảnh báo: FRONTEND_URL chưa được cấu hình, mọi request từ trình duyệt sẽ bị CORS chặn.");
+}
 
 // CORS cho frontend Vercel -> backend Render.
 // Cookie đăng nhập cần credentials để browser gửi cookie qua API.
@@ -50,6 +59,17 @@ app.get("/api/health", async (_req, res) => {
     }
 });
 
+// Giới hạn số lần thử đăng nhập / đăng ký để chống dò mật khẩu
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { message: "Bạn thử quá nhiều lần, vui lòng đợi 15 phút rồi thử lại" },
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+
 app.use("/api/auth", authRouter);
 
 // Ảnh do admin tải lên.
@@ -68,6 +88,18 @@ app.use("/api/admin", adminRouter);
 
 app.use("/api/products", productsRouter);
 app.use("/api/orders", ordersRouter);
+
+// Lỗi không được bắt ở route (ví dụ mất kết nối database) vẫn trả JSON thay vì trang HTML
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("Lỗi không mong muốn:", error);
+    if (res.headersSent) return;
+    const status = (error as { status?: number }).status;
+    if (status && status >= 400 && status < 500) {
+        res.status(status).json({ message: "Yêu cầu không hợp lệ" });
+        return;
+    }
+    res.status(500).json({ message: "Lỗi máy chủ, vui lòng thử lại sau" });
+});
 
 const port = Number(process.env.PORT ?? 10000);
 
