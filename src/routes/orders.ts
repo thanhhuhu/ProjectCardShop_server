@@ -5,6 +5,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db";
 import { getUserId } from "../auth";
 import { collectErrors } from "../utils";
+import { validateDiscount } from "./discounts";
 
 const router = Router();
 
@@ -41,6 +42,7 @@ const createOrderSchema = z.object({
     address: z.string().trim().min(5).max(255),
     note: z.string().trim().max(1000).optional().default(""),
     paymentMethod: z.enum(["cod", "bank"]),
+    discountCode: z.string().trim().max(40).optional().default(""),
     items: z.array(orderItemSchema).min(1).max(50),
 });
 
@@ -174,14 +176,25 @@ router.post("/", async (req, res) => {
 
         // Tiền luôn tính từ giá trong database
         const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0);
+
+        // Mã giảm giá: kiểm tra lại ở server (không tin số frontend gửi), khóa dòng mã trong transaction
+        let discountCode = "";
+        let discountAmount = 0;
+        if (data.discountCode) {
+            const result = await validateDiscount(connection, data.discountCode, subtotal, true);
+            if (!result.ok) throw new OrderError(400, result.message);
+            discountCode = result.discount!.code;
+            discountAmount = result.discount!.amount;
+        }
+
         const shippingFee = subtotal === 0 || subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
-        const total = subtotal + shippingFee;
+        const total = subtotal - discountAmount + shippingFee;
 
         const [orderResult] = await connection.execute<ResultSetHeader>(
             `INSERT INTO orders
                 (code, user_id, full_name, phone, email, city, address, note,
-                 subtotal, shipping_fee, total_amount, payment_method, payment_status, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 subtotal, shipping_fee, total_amount, discount_code, discount_amount, payment_method, payment_status, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 code,
                 userId,
@@ -194,6 +207,8 @@ router.post("/", async (req, res) => {
                 subtotal,
                 shippingFee,
                 total,
+                discountCode,
+                discountAmount,
                 data.paymentMethod,
                 paymentStatus,
                 status,
@@ -201,6 +216,11 @@ router.post("/", async (req, res) => {
         );
 
         const orderId = orderResult.insertId;
+
+        // Tăng lượt dùng của mã (chỉ khi đơn tạo thành công)
+        if (discountCode) {
+            await connection.execute("UPDATE discount_codes SET used_count = used_count + 1 WHERE code = ?", [discountCode]);
+        }
 
         for (const { product, quantity, lineTotal } of lines) {
             await connection.execute(
@@ -219,6 +239,8 @@ router.post("/", async (req, res) => {
                 id: orderId,
                 code,
                 subtotal,
+                discountCode,
+                discountAmount,
                 shippingFee,
                 total,
                 payment: data.paymentMethod,
@@ -296,7 +318,7 @@ router.get("/mine", async (req, res) => {
 
         const [orders] = await pool.query<MyOrderRow[]>(
             `SELECT id, code, full_name, phone, city, address, note, subtotal, shipping_fee, total_amount,
-                    payment_method, payment_status, status, paid_at, created_at
+                    discount_code, discount_amount, payment_method, payment_status, status, paid_at, created_at
              FROM orders
              WHERE user_id = ?
              ORDER BY created_at DESC, id DESC
@@ -337,6 +359,8 @@ router.get("/mine", async (req, res) => {
                     note: order.note,
                     subtotal: Number(order.subtotal),
                     shippingFee: Number(order.shipping_fee),
+                    discountCode: order.discount_code,
+                    discountAmount: Number(order.discount_amount),
                     total,
                     payment: order.payment_method,
                     paymentStatus: order.payment_status,
@@ -365,6 +389,76 @@ router.get("/mine", async (req, res) => {
         console.error("Lỗi lấy lịch sử đặt hàng:", error);
         res.status(500).json({ message: "Không thể tải lịch sử đặt hàng" });
     }
+});
+
+/* ---------- Tra cứu đơn cho khách vãng lai (mã đơn + số điện thoại) ---------- */
+
+const lookupSchema = z.object({
+    code: z.string().trim().min(3).max(40),
+    phone: z.string().trim().min(4).max(30),
+});
+
+router.post("/lookup", async (req, res) => {
+    const parsed = lookupSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ message: "Vui lòng nhập mã đơn và số điện thoại" });
+        return;
+    }
+    const code = parsed.data.code.toUpperCase();
+    const phone = parsed.data.phone.replace(/[\s.-]/g, "");
+
+    const [orders] = await pool.query<(RowDataPacket & MyOrderRow)[]>(
+        `SELECT id, code, full_name, phone, city, address, note, subtotal, shipping_fee, total_amount,
+                discount_code, discount_amount, payment_method, payment_status, status, paid_at, created_at
+         FROM orders WHERE code = ? LIMIT 1`,
+        [code],
+    );
+    const order = orders[0];
+    // So khớp số điện thoại (bỏ khoảng trắng) để người lạ không tra bừa bằng mỗi mã đơn
+    if (!order || order.phone.replace(/[\s.-]/g, "") !== phone) {
+        res.status(404).json({ message: "Không tìm thấy đơn khớp mã và số điện thoại" });
+        return;
+    }
+
+    const [items] = await pool.query<MyOrderItemRow[]>(
+        `SELECT product_id, product_code, product_name, rarity, unit_price, quantity, line_total, image_url
+         FROM order_items WHERE order_id = ? ORDER BY id`,
+        [order.id],
+    );
+
+    const total = Number(order.total_amount);
+    const awaitingTransfer = order.payment_method === "bank" && order.payment_status === "unpaid" && order.status !== "cancelled";
+    res.json({
+        order: {
+            code: order.code,
+            fullName: order.full_name,
+            phone: order.phone,
+            city: order.city,
+            address: order.address,
+            note: order.note,
+            subtotal: Number(order.subtotal),
+            shippingFee: Number(order.shipping_fee),
+            discountCode: order.discount_code,
+            discountAmount: Number(order.discount_amount),
+            total,
+            payment: order.payment_method,
+            paymentStatus: order.payment_status,
+            status: order.status,
+            paidAt: order.paid_at,
+            createdAt: order.created_at,
+            paymentInfo: awaitingTransfer ? buildPaymentInfo(order.code, total) : null,
+            items: items.map((item) => ({
+                productId: item.product_id,
+                code: item.product_code,
+                name: item.product_name,
+                rarity: item.rarity,
+                price: Number(item.unit_price),
+                quantity: item.quantity,
+                lineTotal: Number(item.line_total),
+                imageUrl: item.image_url,
+            })),
+        },
+    });
 });
 
 /* ---------- Kiểm tra trạng thái thanh toán ---------- */

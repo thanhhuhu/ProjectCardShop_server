@@ -4,6 +4,8 @@ import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { pool } from "../db";
 import { clearAuthCookie, getUserId, setAuthCookie } from "../auth";
+import { requireAuth } from "../middleware";
+import type { CurrentUser } from "../middleware";
 import { collectErrors, getDuplicateField } from "../utils";
 
 const router = Router();
@@ -129,6 +131,83 @@ router.get("/me", async (req, res) => {
         console.error("Lỗi lấy thông tin người dùng:", error);
         res.status(500).json({ message: "Lỗi máy chủ" });
     }
+});
+
+/* ---------- Hồ sơ cá nhân ---------- */
+
+interface ProfileRow extends RowDataPacket {
+    id: number;
+    username: string;
+    email: string;
+    role: "user" | "admin";
+    full_name: string;
+    phone: string;
+    city: string;
+    address: string;
+}
+
+router.get("/profile", requireAuth, async (_req, res) => {
+    const me = res.locals.user as CurrentUser;
+    const [rows] = await pool.query<ProfileRow[]>(
+        "SELECT id, username, email, role, full_name, phone, city, address FROM users WHERE id = ?",
+        [me.id],
+    );
+    const u = rows[0];
+    res.json({
+        profile: {
+            id: u.id, username: u.username, email: u.email, role: u.role,
+            fullName: u.full_name, phone: u.phone, city: u.city, address: u.address,
+        },
+    });
+});
+
+const profileSchema = z.object({
+    fullName: z.string().trim().max(120).default(""),
+    phone: z.string().trim().max(30).default(""),
+    city: z.string().trim().max(120).default(""),
+    address: z.string().trim().max(255).default(""),
+});
+
+router.patch("/profile", requireAuth, async (req, res) => {
+    const parsed = profileSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ message: "Dữ liệu không hợp lệ", errors: collectErrors(parsed.error) });
+        return;
+    }
+    const me = res.locals.user as CurrentUser;
+    const { fullName, phone, city, address } = parsed.data;
+    await pool.execute(
+        "UPDATE users SET full_name = ?, phone = ?, city = ?, address = ? WHERE id = ?",
+        [fullName, phone, city, address, me.id],
+    );
+    res.json({ profile: { fullName, phone, city, address } });
+});
+
+/* ---------- Đổi mật khẩu ---------- */
+
+const changePasswordSchema = z.object({
+    currentPassword: z.string().min(1, "Vui lòng nhập mật khẩu hiện tại").max(200),
+    newPassword: z.string().min(8, "Mật khẩu mới cần ít nhất 8 ký tự").max(72, "Mật khẩu tối đa 72 ký tự"),
+});
+
+router.post("/change-password", requireAuth, async (req, res) => {
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({ message: "Dữ liệu không hợp lệ", errors: collectErrors(parsed.error) });
+        return;
+    }
+    const me = res.locals.user as CurrentUser;
+    const { currentPassword, newPassword } = parsed.data;
+
+    const [rows] = await pool.query<UserRow[]>("SELECT password_hash FROM users WHERE id = ?", [me.id]);
+    const ok = await bcrypt.compare(currentPassword, rows[0]?.password_hash ?? DUMMY_HASH);
+    if (!ok) {
+        res.status(400).json({ message: "Mật khẩu hiện tại không đúng", errors: { currentPassword: "Mật khẩu hiện tại không đúng" } });
+        return;
+    }
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await pool.execute("UPDATE users SET password_hash = ? WHERE id = ?", [newHash, me.id]);
+    res.json({ ok: true });
 });
 
 /* ---------- Đăng xuất ---------- */

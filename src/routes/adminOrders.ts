@@ -35,6 +35,8 @@ interface AdminOrderRow extends RowDataPacket {
     subtotal: number;
     shipping_fee: number;
     total_amount: number;
+    discount_code: string;
+    discount_amount: number;
     payment_method: "cod" | "bank";
     payment_status: "unpaid" | "paid" | "failed";
     status: OrderStatus;
@@ -74,6 +76,8 @@ const toOrder = (row: AdminOrderRow, items: AdminOrderItemRow[]) => ({
     note: row.note,
     subtotal: Number(row.subtotal),
     shippingFee: Number(row.shipping_fee),
+    discountCode: row.discount_code,
+    discountAmount: Number(row.discount_amount),
     total: Number(row.total_amount),
     payment: row.payment_method,
     paymentStatus: row.payment_status,
@@ -95,7 +99,7 @@ const toOrder = (row: AdminOrderRow, items: AdminOrderItemRow[]) => ({
 
 const SELECT_ORDER = `
     SELECT o.id, o.code, o.user_id, u.username, o.full_name, o.phone, o.email, o.city, o.address, o.note,
-           o.subtotal, o.shipping_fee, o.total_amount, o.payment_method, o.payment_status, o.status,
+           o.subtotal, o.shipping_fee, o.total_amount, o.discount_code, o.discount_amount, o.payment_method, o.payment_status, o.status,
            o.paid_at, o.created_at
     FROM orders o
     LEFT JOIN users u ON u.id = o.user_id`;

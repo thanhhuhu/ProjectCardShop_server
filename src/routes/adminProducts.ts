@@ -6,6 +6,7 @@ import { pool } from "../db";
 import { requireAdmin } from "../middleware";
 import { collectErrors } from "../utils";
 import { MAX_IMAGE_BYTES, deleteUploadedImage, detectImageExtension, saveProductImage } from "../uploads";
+import { notifyBackInStock } from "./stockNotify";
 
 const router = Router();
 
@@ -200,6 +201,14 @@ router.patch("/:id", async (req, res) => {
 
         // Đã thay ảnh khác thì dọn file ảnh cũ (nếu là ảnh tải lên và không thẻ nào còn dùng)
         if (after.image_url !== before.image_url) await removeImageIfUnused(before.image_url);
+
+        // Hết hàng -> có hàng lại: báo cho những người đã đăng ký (gửi mail nếu có cấu hình)
+        if (before.stock === 0 && after.stock > 0) {
+            const siteUrl = process.env.FRONTEND_URL?.split(",")[0]?.trim();
+            notifyBackInStock(after.id, after.name, siteUrl).catch((err) =>
+                console.error("Lỗi báo còn hàng:", err),
+            );
+        }
 
         res.json({ product: toProduct(after) });
     } catch (error) {
