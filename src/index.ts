@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cookieParser from "cookie-parser";
 import type { NextFunction, Request, Response } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import authRouter from "./routes/auth";
 import adminRouter from "./routes/admin";
 import productsRouter from "./routes/products";
@@ -71,10 +71,24 @@ const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: process.env.NODE_ENV === "production" ? 10 : 100,
     skipSuccessfulRequests: true,
+    // Khi frontend gọi qua proxy của Vercel, mọi request có thể mang chung IP của Vercel.
+    // Đếm theo IP + tài khoản để một người gõ sai không làm khóa đăng nhập của tất cả mọi người.
+    keyGenerator: (req) => {
+        const body = (req.body ?? {}) as { account?: unknown; email?: unknown };
+        const who = String(body.account ?? body.email ?? "").trim().toLowerCase().slice(0, 255);
+        return `${ipKeyGenerator(req.ip ?? "")}|${who}`;
+    },
     standardHeaders: "draft-8",
     legacyHeaders: false,
     message: { message: "Bạn thử quá nhiều lần, vui lòng đợi 15 phút rồi thử lại" },
 });
+// Không cho trình duyệt / CDN của Vercel lưu đệm dữ liệu API
+// (tránh trường hợp thông tin đăng nhập của người này bị trả cho người khác)
+app.use("/api", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+});
+
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
 
