@@ -10,6 +10,10 @@ import adminProductsRouter from "./routes/adminProducts";
 import ordersRouter from "./routes/orders";
 import adminOrdersRouter from "./routes/adminOrders";
 import blogRouter from "./routes/blog";
+import reviewsRouter from "./routes/reviews";
+import wishlistRouter from "./routes/wishlist";
+import discountsRouter from "./routes/discounts";
+import stockNotifyRouter from "./routes/stockNotify";
 import { UPLOAD_ROOT } from "./uploads";
 import { pool } from "./db";
 
@@ -94,6 +98,10 @@ app.use("/api/admin", adminRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/blog", blogRouter);
+app.use("/api/reviews", reviewsRouter);
+app.use("/api/wishlist", wishlistRouter);
+app.use("/api/discounts", discountsRouter);
+app.use("/api/stock-notify", stockNotifyRouter);
 
 // Lỗi không được bắt ở route (ví dụ mất kết nối database) vẫn trả JSON thay vì trang HTML
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

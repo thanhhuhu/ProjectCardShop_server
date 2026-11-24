@@ -45,3 +45,28 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
         next(error);
     }
 }
+
+// Chỉ cho người đã đăng nhập đi tiếp (bất kỳ vai trò). Gắn res.locals.user.
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+    try {
+        const userId = getUserId(req);
+        if (!userId) {
+            res.status(401).json({ message: "Bạn cần đăng nhập" });
+            return;
+        }
+        const [rows] = await pool.execute<CurrentUserRow[]>(
+            "SELECT id, username, email, role FROM users WHERE id = ?",
+            [userId],
+        );
+        const user = rows[0];
+        if (!user) {
+            clearAuthCookie(res);
+            res.status(401).json({ message: "Bạn cần đăng nhập" });
+            return;
+        }
+        res.locals.user = { id: user.id, username: user.username, email: user.email, role: user.role } satisfies CurrentUser;
+        next();
+    } catch (error) {
+        next(error);
+    }
+}

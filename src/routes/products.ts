@@ -172,6 +172,32 @@ router.get("/filters", async (req, res) => {
     }
 });
 
+/* ---------- Sản phẩm liên quan (cùng tộc hệ, rồi cùng game) ---------- */
+
+router.get("/:id/related", async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+        res.json({ products: [] });
+        return;
+    }
+    const [self] = await pool.query<ProductRow[]>(`SELECT ${COLUMNS} FROM products WHERE id = ?`, [id]);
+    const base = self[0];
+    if (!base) {
+        res.json({ products: [] });
+        return;
+    }
+    // Ưu tiên cùng tộc hệ; nếu thẻ không có tộc hệ thì lấy cùng game. Còn hàng lên trước.
+    const sameArchetype = base.archetype && base.archetype.trim() !== "";
+    const [rows] = await pool.query<ProductRow[]>(
+        `SELECT ${COLUMNS} FROM products
+         WHERE id <> ? AND ${sameArchetype ? "archetype = ?" : "game = ?"}
+         ORDER BY (stock > 0) DESC, created_at DESC
+         LIMIT 8`,
+        [id, sameArchetype ? base.archetype : base.game],
+    );
+    res.json({ products: rows.map(toProduct) });
+});
+
 /* ---------- Chi tiết một sản phẩm ---------- */
 
 router.get("/:id", async (req, res) => {
