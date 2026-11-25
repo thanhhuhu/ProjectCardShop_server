@@ -16,6 +16,23 @@ const BANK_NAME = process.env.BANK_NAME?.trim() ?? "";
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER?.trim() ?? "";
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME?.trim() ?? "";
 const SEPAY_WEBHOOK_API_KEY = process.env.SEPAY_WEBHOOK_API_KEY?.trim() ?? "";
+const N8N_ORDER_WEBHOOK_URL = process.env.N8N_ORDER_WEBHOOK_URL?.trim() ?? "";
+
+// Gửi thông báo đơn mới sang n8n (để n8n bắn về Telegram, v.v.).
+// Fire-and-forget: không chờ, không để lỗi làm hỏng việc tạo đơn.
+function notifyNewOrder(payload: Record<string, unknown>): void {
+    if (!N8N_ORDER_WEBHOOK_URL) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    fetch(N8N_ORDER_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+    })
+        .catch(() => undefined)
+        .finally(() => clearTimeout(timer));
+}
 
 // Chỉ nhận id sản phẩm và số lượng. Tên, mã, giá, ảnh... luôn đọc lại từ database,
 // không tin dữ liệu frontend gửi lên (các trường thừa như price sẽ bị zod bỏ qua).
@@ -233,6 +250,31 @@ router.post("/", async (req, res) => {
         }
 
         await connection.commit();
+
+        // Báo đơn mới sang n8n (không chặn phản hồi cho khách)
+        notifyNewOrder({
+            event: "order.created",
+            code,
+            customerName: data.fullName,
+            phone: data.phone,
+            city: data.city,
+            address: data.address,
+            note: data.note ?? "",
+            paymentMethod: data.paymentMethod, // "cod" | "bank"
+            subtotal,
+            discountCode,
+            discountAmount,
+            shippingFee,
+            totalAmount: total,
+            itemCount: lines.reduce((sum, line) => sum + line.quantity, 0),
+            items: lines.map((line) => ({
+                name: line.product.name,
+                rarity: line.product.rarity,
+                quantity: line.quantity,
+                lineTotal: line.lineTotal,
+            })),
+            createdAt: new Date().toISOString(),
+        });
 
         res.status(201).json({
             order: {
